@@ -735,6 +735,21 @@ export default function SetupPage() {
     }
   };
 
+  const [resettingWa, setResettingWa] = useState(false);
+
+  const handleResetWhatsApp = async () => {
+    setResettingWa(true);
+    try {
+      await fetch('/api/whatsapp/logout', { method: 'POST' });
+    } catch (error) {
+      console.error('Failed to reset WhatsApp connection', error);
+    } finally {
+      setWaStatus('disconnected');
+      setWaQrDataUrl(null);
+      setResettingWa(false);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!userInput.trim() || botTyping) return;
     const userMsg = userInput.trim();
@@ -1607,11 +1622,24 @@ export default function SetupPage() {
                         <p className="font-mono text-xs text-ink-soft">{whatsappNumber || "No number connected"}</p>
                       </div>
                     </div>
-                    {waStatus === 'connected' ? (
-                      <Badge tone="live">Connected</Badge>
-                    ) : waStatus !== 'disconnected' ? (
-                      <Badge tone="marigold">{waStatus}</Badge>
-                    ) : null}
+                    <div className="flex items-center gap-2">
+                      {waStatus === 'connected' ? (
+                        <Badge tone="live">Connected</Badge>
+                      ) : waStatus !== 'disconnected' ? (
+                        <Badge tone="marigold">{waStatus}</Badge>
+                      ) : null}
+                      {waStatus !== 'disconnected' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleResetWhatsApp}
+                          disabled={resettingWa}
+                          className="border-danger/30 text-danger hover:bg-danger/10 text-xs"
+                        >
+                          {resettingWa ? "Resetting..." : "Reset Connection"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {waStatus === 'disconnected' ? (
@@ -1636,8 +1664,19 @@ export default function SetupPage() {
                       </div>
                     </div>
                   ) : waStatus === 'initializing' ? (
-                    <div className="rounded-xl bg-paper p-4 text-xs text-ink-soft flex items-center justify-center h-48">
-                      Starting WhatsApp client... Please wait.
+                    <div className="rounded-xl bg-paper p-6 text-xs text-ink-soft flex flex-col items-center justify-center space-y-3 min-h-48">
+                      <div className="animate-spin text-teal text-xl">⏳</div>
+                      <p>Starting WhatsApp client... Please wait.</p>
+                      <p className="text-[11px] text-ink-faint">Taking too long?</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleResetWhatsApp}
+                        disabled={resettingWa}
+                        className="border-danger/30 text-danger hover:bg-danger/10 text-xs"
+                      >
+                        {resettingWa ? "Resetting..." : "Cancel & Reset Connection"}
+                      </Button>
                     </div>
                   ) : (
                     <div className="rounded-xl bg-paper p-4 text-xs text-ink-soft">

@@ -358,30 +358,167 @@ function Step4_AIPersonality({ formData, updateFormData, onNext, onPrev }: any) 
 // ============================================
 // STEP 5: CONNECT WHATSAPP
 // ============================================
-function Step5_ConnectWhatsApp({ formData, onNext, onPrev }: any) {
+function Step5_ConnectWhatsApp({ formData, updateFormData, onNext, onPrev }: any) {
+  const [waStatus, setWaStatus] = useState<'disconnected' | 'initializing' | 'qr_ready' | 'connected'>('disconnected');
+  const [waQrDataUrl, setWaQrDataUrl] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("/api/whatsapp/status");
+        if (res.ok) {
+          const data = await res.json();
+          setWaStatus(data.status);
+          if (data.qrDataUrl) {
+            setWaQrDataUrl(data.qrDataUrl);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch WhatsApp status", error);
+      }
+    };
+    
+    fetchStatus();
+    if (waStatus !== "connected") {
+      interval = setInterval(fetchStatus, 2000);
+    }
+    return () => clearInterval(interval);
+  }, [waStatus]);
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    setWaStatus('initializing');
+    try {
+      await fetch('/api/whatsapp/connect', { method: 'POST' });
+    } catch (error) {
+      console.error('Failed to connect WhatsApp', error);
+      setWaStatus('disconnected');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      await fetch('/api/whatsapp/logout', { method: 'POST' });
+    } catch (error) {
+      console.error('Failed to reset WhatsApp connection', error);
+    } finally {
+      setWaStatus('disconnected');
+      setWaQrDataUrl(null);
+      setResetting(false);
+    }
+  };
 
   return (
-    <div className="rounded-[var(--radius-card)] border border-line bg-card-strong p-5 text-center shadow-sm">
-      <h2 className="font-heading text-xl font-bold text-ink mb-2">Connect WhatsApp 📱</h2>
-      <p className="text-ink-soft mb-4 text-sm">Link your business number to start automating replies.</p>
-      <div className="rounded-xl border border-line bg-paper p-4 mb-4">
-        <p className="text-xl font-bold text-ink">{formData.whatsappNumber || "+92 300 1234567"}</p>
+    <div className="rounded-[var(--radius-card)] border border-line bg-card-strong p-5 text-center shadow-sm space-y-4">
+      <h2 className="font-heading text-xl font-bold text-ink mb-1">Connect WhatsApp 💬</h2>
+      <p className="text-ink-soft text-sm mb-4">
+        Link your business number and run our AI agent concurrently with your manual WhatsApp app.
+      </p>
+
+      {/* Connection Status Box */}
+      <div className="rounded-xl border border-line bg-paper p-4 text-left space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-ink-faint uppercase font-semibold tracking-wider">WhatsApp Business Number</p>
+            <p className="font-mono text-sm font-bold text-ink">{formData.whatsappNumber || "+92 300 1234567"}</p>
+          </div>
+          {waStatus === 'connected' ? (
+            <span className="rounded-full bg-success/10 text-success text-xs px-2.5 py-1 font-semibold">
+              ✅ Connected
+            </span>
+          ) : waStatus !== 'disconnected' ? (
+            <span className="rounded-full bg-warning/10 text-warning text-xs px-2.5 py-1 font-semibold capitalize">
+              {waStatus === 'qr_ready' ? 'Scan QR' : waStatus}
+            </span>
+          ) : (
+            <span className="rounded-full bg-ink-faint/10 text-ink-soft text-xs px-2.5 py-1 font-semibold">
+              Disconnected
+            </span>
+          )}
+        </div>
+
+        {waStatus === 'disconnected' && (
+          <div className="pt-2 border-t border-line space-y-3">
+            <Label className="text-xs">Business Phone Number</Label>
+            <div className="flex gap-2">
+              <Input
+                type="tel"
+                value={formData.whatsappNumber || ""}
+                onChange={(e) => updateFormData && updateFormData("whatsappNumber", e.target.value)}
+                placeholder="+923001234567"
+                className="text-xs"
+              />
+              <Button onClick={handleConnect} disabled={connecting} size="sm" className="shrink-0">
+                {connecting ? "Connecting..." : "Connect WhatsApp"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {waStatus === 'initializing' && (
+          <div className="pt-2 border-t border-line flex flex-col items-center py-4 space-y-3 text-center">
+            <div className="animate-spin text-teal text-2xl">⏳</div>
+            <p className="text-xs text-ink-soft">Starting WhatsApp client... Please wait.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReset}
+              disabled={resetting}
+              className="border-danger/30 text-danger hover:bg-danger/10 text-xs"
+            >
+              {resetting ? "Resetting..." : "Cancel & Reset Connection"}
+            </Button>
+          </div>
+        )}
+
+        {waStatus === 'qr_ready' && waQrDataUrl && (
+          <div className="pt-2 border-t border-line flex flex-col items-center py-3 space-y-3 text-center">
+            <p className="text-xs text-ink-soft">Scan this QR code using linked devices in your WhatsApp mobile app:</p>
+            <div className="bg-white p-2 rounded-xl shadow-sm border border-line">
+              <img src={waQrDataUrl} alt="WhatsApp QR Code" className="w-44 h-44" />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReset}
+              disabled={resetting}
+              className="border-danger/30 text-danger hover:bg-danger/10 text-xs mt-2"
+            >
+              {resetting ? "Resetting..." : "Reset Connection"}
+            </Button>
+          </div>
+        )}
+
+        {waStatus === 'connected' && (
+          <div className="pt-2 border-t border-line space-y-3">
+            <p className="text-xs text-success font-medium">
+              🎉 Your WhatsApp number is actively connected and ready for AI auto-replies!
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReset}
+              disabled={resetting}
+              className="border-danger/30 text-danger hover:bg-danger/10 text-xs"
+            >
+              {resetting ? "Resetting..." : "Disconnect & Reset"}
+            </Button>
+          </div>
+        )}
       </div>
-      <Button
-        onClick={() => {
-          setConnecting(true);
-          setTimeout(() => { setConnecting(false); onNext(); }, 1500);
-        }}
-        disabled={connecting}
-        className="w-full bg-success hover:bg-success/90 text-white"
-        size="lg"
-      >
-        {connecting ? "Connecting..." : "Connect via Meta"}
-      </Button>
-      <div className="flex justify-between mt-6 pt-4">
+
+      <div className="flex justify-between mt-6 pt-4 border-t border-line">
         <Button type="button" variant="outline" onClick={onPrev}>
           Back
+        </Button>
+        <Button onClick={onNext} className="bg-teal hover:bg-teal-bright text-paper">
+          {waStatus === 'connected' ? "Continue →" : "Skip for Now →"}
         </Button>
       </div>
     </div>
@@ -648,7 +785,7 @@ export default function OnboardingPage() {
       case 2: return <Step2_ImportCatalogue formData={formData} updateFormData={updateFormData} onNext={nextStep} onPrev={prevStep} />;
       case 3: return <Step3_StorePolicies formData={formData} updateFormData={updateFormData} onNext={nextStep} onPrev={prevStep} />;
       case 4: return <Step4_AIPersonality formData={formData} updateFormData={updateFormData} onNext={nextStep} onPrev={prevStep} />;
-      case 5: return <Step5_ConnectWhatsApp formData={formData} onNext={nextStep} onPrev={prevStep} />;
+      case 5: return <Step5_ConnectWhatsApp formData={formData} updateFormData={updateFormData} onNext={nextStep} onPrev={prevStep} />;
       case 6: return <Step6_Success user={user} formData={formData} onComplete={handleComplete} />;
       default: return null;
     }
