@@ -2,6 +2,7 @@ import { logger } from "@/lib/logger";
 import { Message } from 'whatsapp-web.js';
 import { createClient } from '@supabase/supabase-js';
 import { generateGroundedReply } from '@/lib/ai/generate-reply';
+import { cancelShopifyOrder, addShopifyOrderTag } from '@/lib/shopify/client';
 import type { AgentConfigRow, ProductRow, SellerRow } from '@/lib/ai/types';
 
 // Initialize Supabase client lazily inside function scope to avoid build-time context evaluation issues
@@ -65,8 +66,6 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
 
     let sellerData = sellerResult.data;
 
-    // If seller record is missing in public.sellers (e.g. auth trigger skipped),
-    // auto-create the seller row so foreign key constraints pass and inbox/AI reply work seamlessly.
     if (!sellerData) {
       logger.warn(`[WhatsApp] ⚠️ Seller ${sellerId} not found in sellers table. Auto-creating seller record...`);
       const { data: upsertedSeller, error: upsertError } = await supabase
@@ -133,9 +132,7 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
       products = (fallbackProducts.data || []) as ProductRow[];
     }
 
-    // ==========================================
-    // DB LOGIC: Save incoming message to Inbox
-    // ==========================================
+    // Extract customer phone
     let extractedPhone = '';
     let customerNameStr = '';
 
@@ -146,7 +143,6 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
           customerNameStr = contact.pushname || contact.name || (contact as any).shortName || '';
         }
 
-        // Try whatsapp-web.js async getFormattedNumber() method
         try {
           const formatted = await contact.getFormattedNumber();
           if (formatted) {
@@ -182,7 +178,6 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
 
     let cleanPhone = extractedPhone.replace(/[^0-9]/g, '');
 
-    // Format Pakistani phone numbers
     if (cleanPhone.startsWith('03') && cleanPhone.length === 11) {
       cleanPhone = '92' + cleanPhone.substring(1);
     } else if (cleanPhone.startsWith('3') && cleanPhone.length === 10) {
@@ -234,7 +229,7 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
     }
 
     if (conversation) {
-      const { error: msgInsertError } = await supabase
+      await supabase
         .from('messages')
         .insert({
           seller_id: sellerId,
@@ -243,23 +238,107 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
           content: messageText,
           read: false
         });
-      
-      if (msgInsertError) {
-        logger.error(`[WhatsApp] ❌ Error saving customer message to DB:`, msgInsertError);
+    }
+
+    // ==========================================
+    // COD Order Confirmation / Cancellation Handling
+    // ==========================================
+    const { data: pendingOrder } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('seller_id', sellerId)
+      .eq('customer_phone', customerPhoneStr)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .maybeSingle();
+
+    if (pendingOrder) {
+      const lowerText = messageText.toLowerCase().trim();
+      const confirmKeywords = ['confirm', 'confirmation', 'yes', 'haan', 'hn', 'sahi', 'ok', 'approve', 'approved', 'ji haan', 'bhej do', 'confrim'];
+      const cancelKeywords = ['cancel', 'cancellation', 'no', 'nahi', 'na', 'reject', 'mat bhejo', 'nops', 'cancel kardo'];
+
+      const isConfirm = confirmKeywords.some((k) => lowerText.includes(k));
+      const isCancel = cancelKeywords.some((k) => lowerText.includes(k));
+
+      if (isConfirm || isCancel) {
+        const configData: any = configResult.data;
+        let shopDomain = configData?.shopify_shop_domain || '';
+        let accessToken = configData?.shopify_access_token || '';
+
+        if (configData?.knowledge_items && Array.isArray(configData.knowledge_items)) {
+          const shopifyItem = (configData.knowledge_items as any[]).find((k) => k.id === 'k_shopify_config');
+          if (shopifyItem) {
+            try {
+              const parsed = JSON.parse(shopifyItem.content);
+              if (parsed.shopDomain) shopDomain = parsed.shopDomain;
+              if (parsed.accessToken) accessToken = parsed.accessToken;
+            } catch {}
+          }
+        }
+
+        const shopifyConfig = { shopDomain, accessToken };
+
+        if (isConfirm) {
+          logger.info(`[WhatsApp COD] ✅ Customer ${customerPhoneStr} confirmed order #${pendingOrder.shopify_order_id || pendingOrder.id}`);
+          if (shopifyConfig.shopDomain && shopifyConfig.accessToken && pendingOrder.shopify_order_id) {
+            await addShopifyOrderTag(shopifyConfig, pendingOrder.shopify_order_id, 'COD-Confirmed');
+          }
+          await supabase
+            .from('orders')
+            .update({ status: 'confirmed' })
+            .eq('id', pendingOrder.id);
+
+          const replyText = "✅ Thank you! Your Cash-on-Delivery order has been confirmed and is being processed for delivery.";
+          await msg.reply(replyText);
+
+          if (conversation) {
+            await supabase.from('messages').insert({
+              seller_id: sellerId,
+              conversation_id: conversation.id,
+              sender_type: 'bot',
+              content: replyText,
+              read: true,
+            });
+            await supabase.from('conversations').update({ status: 'auto-replied' }).eq('id', conversation.id);
+          }
+          return;
+        } else if (isCancel) {
+          logger.info(`[WhatsApp COD] ❌ Customer ${customerPhoneStr} cancelled order #${pendingOrder.shopify_order_id || pendingOrder.id}`);
+          if (shopifyConfig.shopDomain && shopifyConfig.accessToken && pendingOrder.shopify_order_id) {
+            await cancelShopifyOrder(shopifyConfig, pendingOrder.shopify_order_id, 'customer');
+            await addShopifyOrderTag(shopifyConfig, pendingOrder.shopify_order_id, 'COD-Cancelled');
+          }
+          await supabase
+            .from('orders')
+            .update({ status: 'cancelled' })
+            .eq('id', pendingOrder.id);
+
+          const replyText = "❌ Your order has been cancelled on our store. Restocked items in inventory. Let us know if you need anything else!";
+          await msg.reply(replyText);
+
+          if (conversation) {
+            await supabase.from('messages').insert({
+              seller_id: sellerId,
+              conversation_id: conversation.id,
+              sender_type: 'bot',
+              content: replyText,
+              read: true,
+            });
+            await supabase.from('conversations').update({ status: 'auto-replied' }).eq('id', conversation.id);
+          }
+          return;
+        }
       }
-    } else {
-      logger.error(`[WhatsApp] ❌ No conversation found or created, skipping message insert.`);
     }
 
     logger.info(`[WhatsApp] 🤖 Generating AI reply for seller ${sellerId}...`);
     
-    // Call the same function used by the Playground
     const aiResponse = await generateGroundedReply({
       message: messageText,
       seller,
       config,
       products,
-      conversationHistory: [], // Keeping it simple for the MVP without pulling full conversation history
+      conversationHistory: [],
     });
 
     if (aiResponse.reply) {
@@ -267,11 +346,8 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
       await msg.reply(aiResponse.reply);
       logger.info(`[WhatsApp] ✅ Reply successfully sent to ${msg.from}`);
 
-      // ==========================================
-      // DB LOGIC: Save AI reply to Inbox
-      // ==========================================
       if (conversation) {
-        const { error: botMsgError } = await supabase
+        await supabase
           .from('messages')
           .insert({
             seller_id: sellerId,
@@ -280,25 +356,15 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
             content: aiResponse.reply,
             read: true
           });
-          
-        if (botMsgError) {
-          logger.error(`[WhatsApp] ❌ Error saving bot message to DB:`, botMsgError);
-        }
 
-        const { error: convUpdateError } = await supabase
+        await supabase
           .from('conversations')
           .update({
             status: 'auto-replied',
             last_message_at: new Date().toISOString(),
           })
-          .eq('id', conversation.id);
-          
-        if (convUpdateError) {
-          logger.error(`[WhatsApp] ❌ Error updating conversation status:`, convUpdateError);
-        }
+          .eq('eq', conversation.id);
       }
-    } else {
-      logger.info(`[WhatsApp] ⚠️ AI chose not to reply or handoff was triggered without a message.`);
     }
 
   } catch (error) {

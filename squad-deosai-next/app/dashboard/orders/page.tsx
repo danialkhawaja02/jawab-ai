@@ -139,7 +139,7 @@ export default function OrdersPage() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">How it works</p>
             <p className="text-sm text-ink-soft">
-              When a customer checks out, Deosai messages them to verify COD. If they reply{" "}
+              When a customer checks out, Jawab AI messages them to verify COD. If they reply{" "}
               <strong>Confirm</strong>, it locks in the order. If they reply <strong>Cancel</strong>,
               you flag the order to avoid transit loss.
             </p>

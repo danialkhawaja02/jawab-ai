@@ -81,7 +81,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             Admin Panel
           </p>
           <Badge tone="teal" className="mt-1">
-            Deosai Team
+            Jawab AI Team
           </Badge>
         </div>
         <div className="mt-6">{navList}</div>

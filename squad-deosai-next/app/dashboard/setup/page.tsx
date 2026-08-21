@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/client";
 
+import { useSearchParams } from "next/navigation";
+
 type SubTab = "onboarding" | "tasks" | "knowledge" | "tone" | "tools" | "whatsapp";
 
 interface KnowledgeItem {
@@ -33,8 +35,26 @@ const tryParseSpreadsheet = (content: string) => {
 
 export default function SetupPage() {
   const { user, loading: authLoading } = useAuth();
+  const searchParams = useSearchParams();
   const [dataLoading, setDataLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<SubTab>("onboarding");
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab") as SubTab | null;
+    if (tabParam && ["onboarding", "tasks", "knowledge", "tone", "whatsapp"].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+    const shopParam = searchParams.get("shop");
+    const connectedParam = searchParams.get("shopify_connected");
+    if (shopParam || connectedParam === "true") {
+      const cleanShop = (shopParam || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+      if (cleanShop) {
+        setShopifyShopDomain(cleanShop);
+        setShopifyDomainInput(cleanShop);
+      }
+      setShopifyConnected(true);
+    }
+  }, [searchParams]);
   const [initialized, setInitialized] = useState(false);
   const [onboardingData, setOnboardingData] = useState<any>(null);
   const [savingOnboarding, setSavingOnboarding] = useState(false);
@@ -89,7 +109,15 @@ export default function SetupPage() {
 
   // Setup — Tools & Actions States
   const [shopifyConnected, setShopifyConnected] = useState(false);
+  const [shopifyShopDomain, setShopifyShopDomain] = useState("");
   const [codAutoConfirm, setCodAutoConfirm] = useState(true);
+  const [codMessageTemplate, setCodMessageTemplate] = useState(
+    "Hi {customer_name}! Thank you for your order #{order_number} ({items}) for Rs. {total} at {store_name}.\n\nPlease reply CONFIRM to confirm your Cash-on-Delivery order, or CANCEL to cancel it."
+  );
+  const [showShopifyModal, setShowShopifyModal] = useState(false);
+  const [shopifyDomainInput, setShopifyDomainInput] = useState("");
+  const [shopifyTokenInput, setShopifyTokenInput] = useState("");
+  const [savingShopify, setSavingShopify] = useState(false);
 
   // Setup — WhatsApp Coexistence Status
   const [whatsappRequested, setWhatsappRequested] = useState(false);
@@ -156,6 +184,25 @@ export default function SetupPage() {
           }
           if (config.conciseness) setConciseness(config.conciseness);
           if (config.hinglish_support !== null) setHinglishSupport(config.hinglish_support);
+          if (config.shopify_connected !== undefined) setShopifyConnected(config.shopify_connected);
+          if (config.cod_auto_confirm !== undefined) setCodAutoConfirm(config.cod_auto_confirm);
+
+          const shopifyItem = currentKnowledgeList.find((k) => k.id === "k_shopify_config");
+          if (shopifyItem) {
+            try {
+              const parsedShopify = JSON.parse(shopifyItem.content);
+              if (parsedShopify.shopDomain) {
+                setShopifyShopDomain(parsedShopify.shopDomain);
+                setShopifyDomainInput(parsedShopify.shopDomain);
+              }
+              if (parsedShopify.accessToken) {
+                setShopifyTokenInput(parsedShopify.accessToken);
+              }
+              if (parsedShopify.codTemplate) {
+                setCodMessageTemplate(parsedShopify.codTemplate);
+              }
+            } catch {}
+          }
         } else {
           // Fallback to local storage if config not found in DB
           const cachedPrompt = window.localStorage.getItem(`agentPrompt_${user.id}`);
@@ -183,19 +230,15 @@ export default function SetupPage() {
           } catch {}
         }
 
-        if (sellerRes.data) {
-          const s = sellerRes.data;
-          if (s.phone) setWhatsappNumber(s.phone);
-          if (s.whatsapp_requested !== undefined) setWhatsappRequested(s.whatsapp_requested);
-
+        if (parsedOb && Object.keys(parsedOb).length > 0) {
           setOnboardingData({
-            businessName: s.business_name || parsedOb.businessName || "",
-            category: s.industry || parsedOb.category || "",
-            whatsappNumber: s.phone || parsedOb.whatsappNumber || "",
-            deliveryCharges: parsedOb.deliveryCharges || "",
-            deliveryTime: parsedOb.deliveryTime || "",
-            returnPolicy: parsedOb.returnPolicy || "",
-            agentName: parsedOb.agentName || "",
+            businessName: parsedOb.businessName || sellerRes.data?.business_name || "",
+            category: parsedOb.category || sellerRes.data?.industry || "Jewellery",
+            whatsappNumber: parsedOb.whatsappNumber || sellerRes.data?.phone || "",
+            deliveryCharges: parsedOb.deliveryCharges || "200",
+            deliveryTime: parsedOb.deliveryTime || "3-5 business days",
+            returnPolicy: parsedOb.returnPolicy || "7 days return policy",
+            agentName: parsedOb.agentName || "Jawab AI",
             aiTone: parsedOb.aiTone || "friendly",
             aiLanguage: parsedOb.aiLanguage || "urdu-english",
           });
@@ -276,13 +319,30 @@ export default function SetupPage() {
     neverDoOverride?: string,
     memoryOverride?: string,
     concisenessOverride?: string,
-    hinglishOverride?: boolean
+    hinglishOverride?: boolean,
+    overrideConnected?: boolean,
+    overrideShopDomain?: string
   ) => {
     if (!user) return;
     setSavingConfig(true);
     try {
       const supabase = createClient();
-      const listToSave = (overrideList || knowledgeList).filter((k) => k.id !== "k_products_table");
+      const shopifyConfigItem: KnowledgeItem = {
+        id: "k_shopify_config",
+        type: "document",
+        name: "Shopify Store Configuration",
+        content: JSON.stringify({
+          shopDomain: overrideShopDomain !== undefined ? overrideShopDomain : shopifyShopDomain,
+          accessToken: shopifyTokenInput,
+          codTemplate: codMessageTemplate,
+        }),
+      };
+
+      const listToSave = [
+        shopifyConfigItem,
+        ...(overrideList || knowledgeList).filter((k) => k.id !== "k_products_table" && k.id !== "k_shopify_config"),
+      ];
+
       const payload = {
         seller_id: user.id,
         agent_prompt: promptOverride !== undefined ? promptOverride : agentPrompt,
@@ -292,7 +352,7 @@ export default function SetupPage() {
         tone_guidelines: overrideTone || toneGuidelines,
         conciseness: concisenessOverride !== undefined ? concisenessOverride : conciseness,
         hinglish_support: hinglishOverride !== undefined ? hinglishOverride : hinglishSupport,
-        shopify_connected: shopifyConnected,
+        shopify_connected: overrideConnected !== undefined ? overrideConnected : shopifyConnected,
         cod_auto_confirm: codAutoConfirm,
         updated_at: new Date().toISOString(),
       };
@@ -841,7 +901,7 @@ export default function SetupPage() {
             ["tasks", "Tasks & Rules", "📋"],
             ["knowledge", "Knowledge & Data", "📂"],
             ["tone", "Tone & Voice", "🗣️"],
-            ["tools", "Tools & Actions", "🛠️"],
+            // ["tools", "Tools & Actions", "🛠️"], // Hidden for future release
             ["whatsapp", "WhatsApp Coexist", "💬"],
           ] as const
         ).map(([key, label, icon]) => (
@@ -1552,50 +1612,205 @@ export default function SetupPage() {
               <div>
                 <h2 className="text-xl font-bold tracking-tight text-ink font-heading">Tools & Actions</h2>
                 <p className="text-xs text-ink-soft mt-1">
-                  Configure auto-checkout systems or third-party webhooks for Shopify.
+                  Connect your Shopify store to enable automated Cash-on-Delivery (COD) order confirmation and stock cancellation via WhatsApp.
                 </p>
               </div>
 
+              {/* Shopify Integration Card */}
               <Card>
-                <CardBody className="flex items-center justify-between p-5">
-                  <div>
-                    <p className="text-sm font-semibold text-ink">Shopify / WooCommerce integration</p>
-                    <p className="text-xs text-ink-soft mt-0.5">
-                      Fetch inventory status and sync customer numbers for COD checkouts.
-                    </p>
+                <CardBody className="p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">🛍️</span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-ink">Shopify Store Integration</p>
+                          {shopifyConnected ? (
+                            <Badge tone="live">Connected</Badge>
+                          ) : (
+                            <Badge tone="neutral">Disconnected</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-ink-soft mt-0.5">
+                          {shopifyConnected && shopifyShopDomain
+                            ? `Active store: ${shopifyShopDomain}`
+                            : "Connect Jawab AI to your Shopify store to listen for new Cash-on-Delivery checkouts."}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      {shopifyConnected ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            setShopifyConnected(false);
+                            setShopifyShopDomain("");
+                            await saveConfigToSupabase();
+                          }}
+                          className="border-danger/30 text-danger hover:bg-danger/10 text-xs"
+                        >
+                          Disconnect Store
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => setShowShopifyModal((v) => !v)}
+                          className="bg-teal hover:bg-teal-bright text-paper text-xs"
+                        >
+                          {showShopifyModal ? "Cancel" : "Connect Shopify Store"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <Button
-                    variant={shopifyConnected ? "outline" : "primary"}
-                    size="sm"
-                    onClick={() => setShopifyConnected((v) => !v)}
-                  >
-                    {shopifyConnected ? "Disconnect" : "Connect Store"}
-                  </Button>
+
+                  {showShopifyModal && !shopifyConnected && (
+                    <div className="rounded-xl border border-teal/40 bg-paper p-4 space-y-3 mt-3">
+                      <div>
+                        <Label htmlFor="shopify-domain-input" className="text-xs font-semibold text-ink">
+                          Shopify Store Domain
+                        </Label>
+                        <Input
+                          id="shopify-domain-input"
+                          value={shopifyDomainInput}
+                          onChange={(e) => setShopifyDomainInput(e.target.value)}
+                          placeholder="mystore.myshopify.com"
+                          className="text-xs font-mono mt-1"
+                        />
+                      </div>
+
+                      <div>
+                        <Label htmlFor="shopify-token-input" className="text-xs font-semibold text-ink flex items-center justify-between">
+                          <span>Shopify Admin API Access Token</span>
+                          <span className="text-[10px] text-ink-faint font-normal">(Optional if using OAuth)</span>
+                        </Label>
+                        <Input
+                          id="shopify-token-input"
+                          type="password"
+                          value={shopifyTokenInput}
+                          onChange={(e) => setShopifyTokenInput(e.target.value)}
+                          placeholder="shpat_xxxxxxxxxxxxxxxxxxxxxxxx"
+                          className="text-xs font-mono mt-1"
+                        />
+                      </div>
+
+                      <div className="flex gap-2 justify-end pt-1">
+                        <Button
+                          size="sm"
+                          disabled={!shopifyDomainInput.trim() || savingShopify}
+                          onClick={async () => {
+                            setSavingShopify(true);
+                            try {
+                              const clean = shopifyDomainInput.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+                              setShopifyShopDomain(clean);
+                              setShopifyConnected(true);
+                              setShowShopifyModal(false);
+
+                              // Save directly to Supabase agent_configs
+                              if (user) {
+                                const supabase = createClient();
+                                const payload: any = {
+                                  seller_id: user.id,
+                                  shopify_connected: true,
+                                  shopify_shop_domain: clean,
+                                  updated_at: new Date().toISOString(),
+                                };
+                                if (shopifyTokenInput.trim()) {
+                                  payload.shopify_access_token = shopifyTokenInput.trim();
+                                }
+                                await supabase.from('agent_configs').upsert(payload, { onConflict: 'seller_id' });
+                              }
+
+                              window.location.href = `/api/shopify/auth?shop=${clean}`;
+                            } catch (err) {
+                              console.error("Failed to connect Shopify store", err);
+                            } finally {
+                              setSavingShopify(false);
+                            }
+                          }}
+                          className="bg-teal hover:bg-teal-bright text-paper text-xs shrink-0"
+                        >
+                          {savingShopify ? "Connecting..." : "Connect Store →"}
+                        </Button>
+                      </div>
+                      <p className="text-[11px] text-ink-faint">
+                        Enter your .myshopify.com domain. Jawab AI will automatically connect your store and listen for Cash-on-Delivery checkouts.
+                      </p>
+                    </div>
+                  )}
                 </CardBody>
               </Card>
 
+              {/* Automatic COD Confirmation Card */}
               <Card>
-                <CardBody className="flex items-center justify-between p-5">
-                  <div>
-                    <p className="text-sm font-semibold text-ink">Automatic COD Confirmation</p>
-                    <p className="text-xs text-ink-soft mt-0.5">
-                      Instantly dispatch WhatsApp template confirmations upon Shopify checkout webhook.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setCodAutoConfirm(!codAutoConfirm)}
-                    className={cn(
-                      "flex h-6 w-11 flex-none items-center rounded-full px-0.5 transition-colors duration-200 focus:outline-none",
-                      codAutoConfirm ? "bg-teal" : "bg-ink-faint"
-                    )}
-                  >
-                    <span
+                <CardBody className="p-5 space-y-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">Automatic Cash-on-Delivery (COD) Confirmation</p>
+                      <p className="text-xs text-ink-soft mt-0.5">
+                        Instantly dispatch WhatsApp verification messages when a customer places a COD order on Shopify.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCodAutoConfirm(!codAutoConfirm)}
                       className={cn(
-                        "h-5 w-5 rounded-full bg-paper transition-transform duration-200",
-                        codAutoConfirm ? "translate-x-5" : "translate-x-0"
+                        "flex h-6 w-11 flex-none items-center rounded-full px-0.5 transition-colors duration-200 focus:outline-none",
+                        codAutoConfirm ? "bg-teal" : "bg-ink-faint"
                       )}
-                    />
-                  </button>
+                    >
+                      <span
+                        className={cn(
+                          "h-5 w-5 rounded-full bg-paper transition-transform duration-200",
+                          codAutoConfirm ? "translate-x-5" : "translate-x-0"
+                        )}
+                      />
+                    </button>
+                  </div>
+
+                  {codAutoConfirm && (
+                    <div className="space-y-3 pt-2 border-t border-line">
+                      <Label htmlFor="cod-template-input" className="text-xs font-semibold text-ink">
+                        WhatsApp COD Confirmation Message Template
+                      </Label>
+                      <Textarea
+                        id="cod-template-input"
+                        value={codMessageTemplate}
+                        onChange={(e) => setCodMessageTemplate(e.target.value)}
+                        className="min-h-28 text-xs font-mono leading-relaxed"
+                      />
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-[11px] text-ink-faint mr-1">Insert Tags:</span>
+                        {[
+                          ["{customer_name}", "Customer Name"],
+                          ["{order_number}", "Order #"],
+                          ["{items}", "Item List"],
+                          ["{total}", "Total Price"],
+                          ["{store_name}", "Store Name"],
+                        ].map(([tag, label]) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => setCodMessageTemplate((prev) => prev + " " + tag)}
+                            className="rounded-md border border-line bg-paper px-2 py-0.5 text-[11px] font-mono text-ink-soft hover:border-teal hover:text-teal"
+                          >
+                            + {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="flex justify-end pt-3">
+                        <Button
+                          size="sm"
+                          onClick={() => saveConfigToSupabase()}
+                          disabled={savingConfig}
+                          className="bg-teal hover:bg-teal-bright text-paper text-xs"
+                        >
+                          {savingConfig ? "Saving..." : "Save COD Configuration"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </CardBody>
               </Card>
             </div>
