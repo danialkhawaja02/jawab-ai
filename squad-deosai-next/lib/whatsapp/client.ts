@@ -118,6 +118,8 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
         '--disable-extensions',
         '--disable-sync',
         '--disable-plugins',
+        '--disable-blink-features=AutomationControlled',
+        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       ],
       headless: true,
     },
@@ -147,6 +149,8 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
 
   client.on('authenticated', () => {
     logger.info(`[WhatsApp] Authenticated for seller ${sellerId}`);
+    state.status = 'connected';
+    state.qrDataUrl = undefined;
   });
 
   client.on('auth_failure', (msg: any) => {

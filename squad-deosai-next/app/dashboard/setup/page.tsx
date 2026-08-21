@@ -242,7 +242,7 @@ export default function SetupPage() {
   // WhatsApp Polling
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (activeTab === "whatsapp" && waStatus !== "connected" && waStatus !== "disconnected") {
+    if (activeTab === "whatsapp" && waStatus !== "connected") {
       const fetchStatus = async () => {
         try {
           const res = await fetch("/api/whatsapp/status");
@@ -259,7 +259,9 @@ export default function SetupPage() {
       };
       
       fetchStatus();
-      interval = setInterval(fetchStatus, 2000);
+      if (waStatus !== "disconnected") {
+        interval = setInterval(fetchStatus, 2000);
+      }
     }
     return () => clearInterval(interval);
   }, [activeTab, waStatus]);
