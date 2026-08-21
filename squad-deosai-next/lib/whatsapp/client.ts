@@ -19,10 +19,16 @@ export interface WhatsAppClientState {
   client?: Client;
 }
 
-// In-memory store for clients. 
-// Note: In serverless (Vercel), this memory is ephemeral. 
-// For production, a dedicated worker process is recommended.
-export const whatsappClients = new Map<string, WhatsAppClientState>();
+// Global singleton in-memory store for clients across Next.js API route bundles.
+const globalForWhatsApp = globalThis as unknown as {
+  whatsappClients: Map<string, WhatsAppClientState>;
+};
+
+if (!globalForWhatsApp.whatsappClients) {
+  globalForWhatsApp.whatsappClients = new Map<string, WhatsAppClientState>();
+}
+
+export const whatsappClients = globalForWhatsApp.whatsappClients;
 
 function getPuppeteerExecutablePath(): string | undefined {
   // Environment variable takes priority
@@ -61,7 +67,7 @@ function getPuppeteerExecutablePath(): string | undefined {
 }
 
 async function cleanupWhatsAppSession(sellerId: string) {
-  // Delete session folder
+  // Delete session folder for this seller when explicitly logged out
   const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
   if (fs.existsSync(sessionPath)) {
     try {
@@ -70,18 +76,6 @@ async function cleanupWhatsAppSession(sellerId: string) {
     } catch (err) {
       logger.error(`[WhatsApp] Error deleting session folder for ${sellerId}:`, err);
     }
-  }
-
-  // Kill stray headless chrome/chromium processes
-  if (process.platform === 'win32') {
-    try {
-      await execPromise('wmic process where "name=\'chrome.exe\' and commandline like \'%headless%\'" call terminate');
-      logger.info(`[WhatsApp] Cleaned up stray headless Chrome processes on Windows.`);
-    } catch (err) {}
-  } else {
-    try {
-      await execPromise('pkill -f chromium || pkill -f chrome || true');
-    } catch (err) {}
   }
 }
 
@@ -95,8 +89,6 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
   whatsappClients.set(sellerId, state);
 
   logger.info(`[WhatsApp] Initializing client for seller ${sellerId}...`);
-
-  await cleanupWhatsAppSession(sellerId);
 
   const executablePath = getPuppeteerExecutablePath();
   logger.info(`[WhatsApp] Platform: ${process.platform}, Using executable path: ${executablePath || 'default (Puppeteer will download)'}`);
@@ -185,7 +177,20 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
 }
 
 export function getWhatsAppStatus(sellerId: string): WhatsAppClientState {
-  return whatsappClients.get(sellerId) || { status: 'disconnected' };
+  const state = whatsappClients.get(sellerId);
+  if (state) return state;
+
+  // Check if session directory exists on disk for this seller
+  const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
+  if (fs.existsSync(sessionPath)) {
+    // Session folder exists on disk: auto-restore client session in background
+    initializeWhatsAppClient(sellerId).catch((err) => {
+      logger.error(`[WhatsApp] Failed to auto-restore session for ${sellerId}:`, err);
+    });
+    return { status: 'initializing' };
+  }
+
+  return { status: 'disconnected' };
 }
 
 export async function logoutWhatsAppClient(sellerId: string): Promise<void> {
