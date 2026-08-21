@@ -27,8 +27,13 @@ export const whatsappClients = new Map<string, WhatsAppClientState>();
 function getPuppeteerExecutablePath(): string | undefined {
   // Environment variable takes priority
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    logger.info(`[WhatsApp] Using PUPPETEER_EXECUTABLE_PATH: ${process.env.PUPPETEER_EXECUTABLE_PATH}`);
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
+    const path = process.env.PUPPETEER_EXECUTABLE_PATH;
+    if (fs.existsSync(path)) {
+      logger.info(`[WhatsApp] Using PUPPETEER_EXECUTABLE_PATH from env: ${path}`);
+      return path;
+    } else {
+      logger.warn(`[WhatsApp] PUPPETEER_EXECUTABLE_PATH set but not found: ${path}`);
+    }
   }
   
   // Windows path
@@ -38,9 +43,8 @@ function getPuppeteerExecutablePath(): string | undefined {
   
   // Linux paths - check in order of preference
   const knownLinuxPaths = [
-    '/nix/store/bin/chromium',      // Nixpacks standard
+    '/usr/bin/chromium-browser',     // Alpine Linux (Dockerfile)
     '/usr/bin/chromium',             // Debian/Ubuntu
-    '/usr/bin/chromium-browser',     // Debian/Ubuntu alternative
     '/usr/bin/google-chrome',        // Google Chrome
     '/usr/bin/google-chrome-stable', // Google Chrome stable
   ];
