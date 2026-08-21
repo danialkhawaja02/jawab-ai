@@ -1,55 +1,95 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Pulse } from "@/components/ui/Pulse";
-import { Input, Label, Textarea } from "@/components/ui/Field";
-import { formatPKR } from "@/lib/utils";
-import {
-  allSellers,
-  products as seedProducts,
-  policies as seedPolicies,
-  type Seller,
-  type Product,
-} from "@/lib/mock-data";
+import { Label } from "@/components/ui/Field";
+
+interface KnowledgeItem {
+  id: string;
+  type: "website" | "document" | "qa";
+  name: string;
+  content: string;
+}
+
+interface SellerDetail {
+  id: string;
+  businessName: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  plan: string;
+  role: string;
+  industry: string;
+  whatsappNumber: string;
+  whatsappConnected: boolean;
+  whatsappStatus: string;
+  memberSince: string;
+  onboarded: boolean;
+}
 
 export default function SellerDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const seller = allSellers.find((s) => s.id === id);
+  const [seller, setSeller] = useState<SellerDetail | null>(null);
+  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [policies, setPolicies] = useState<{ delivery: string; returns: string; hours: string }>({
+    delivery: "Not set",
+    returns: "Not set",
+    hours: "Standard business hours",
+  });
+  const [loading, setLoading] = useState(true);
 
-  const [whatsappConnected, setWhatsappConnected] = useState(
-    seller?.whatsappConnected ?? false
-  );
-  const [sellerProducts] = useState<Product[]>(
-    seller?.id === "seller_meher" ? seedProducts : []
-  );
-  const [policies] = useState(
-    seller?.id === "seller_meher" ? seedPolicies : { delivery: "", returns: "", hours: "" }
-  );
+  const fetchSellerDetail = async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/admin/sellers/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSeller(data.seller);
+        setKnowledgeItems(data.knowledgeItems || []);
+        if (data.policies) setPolicies(data.policies);
+      }
+    } catch (err) {
+      console.error("Failed to fetch seller detail", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSellerDetail();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center bg-paper font-landing">
+        <Pulse label="Loading seller profile..." />
+      </div>
+    );
+  }
 
   if (!seller) {
     return (
-      <>
+      <div className="font-landing space-y-4">
         <PageHeader title="Seller not found" />
         <p className="text-sm text-ink-soft">
-          <Link href="/admin" className="text-teal hover:underline">
+          <Link href="/admin" className="text-teal hover:underline font-semibold">
             ← Back to all sellers
           </Link>
         </p>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
+    <div className="font-landing space-y-6">
       <PageHeader
         title={seller.businessName}
-        description={`${seller.ownerName} · ${seller.email}`}
+        description={`${seller.ownerName !== '—' ? `${seller.ownerName} · ` : ""}${seller.email}`}
         action={
           <Link
             href="/admin"
@@ -62,12 +102,12 @@ export default function SellerDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Profile */}
-        <Card>
+        <Card className="bg-card-strong">
           <CardHeader title="Profile" />
           <CardBody className="space-y-3 pt-4">
             <div>
               <Label>Business name</Label>
-              <p className="text-sm text-ink">{seller.businessName}</p>
+              <p className="text-sm font-bold text-ink">{seller.businessName}</p>
             </div>
             <div>
               <Label>Owner</Label>
@@ -92,10 +132,10 @@ export default function SellerDetailPage() {
           </CardBody>
         </Card>
 
-        {/* WhatsApp management */}
-        <Card className="lg:col-span-2">
+        {/* WhatsApp status */}
+        <Card className="lg:col-span-2 bg-card-strong">
           <CardHeader title="WhatsApp connection" />
-          <CardBody className="pt-4">
+          <CardBody className="pt-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-paper p-4">
               <div className="flex items-center gap-3">
                 <span className="grid h-10 w-10 place-items-center rounded-full bg-live-soft text-lg">
@@ -103,7 +143,13 @@ export default function SellerDetailPage() {
                 </span>
                 <div>
                   <p className="text-sm font-semibold text-ink">
-                    {whatsappConnected ? "Connected" : "Not connected"}
+                    {seller.whatsappConnected
+                      ? "Connected"
+                      : seller.whatsappStatus === "qr_ready"
+                      ? "Scan QR Code"
+                      : seller.whatsappStatus === "initializing"
+                      ? "Initializing..."
+                      : "Not connected"}
                   </p>
                   <p className="font-mono text-xs text-ink-soft">
                     {seller.whatsappNumber || "No number provided"}
@@ -111,84 +157,74 @@ export default function SellerDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                {whatsappConnected && <Pulse label="auto-replying" />}
-                {seller.whatsappRequested && !whatsappConnected && (
-                  <Badge tone="attention">Seller requested connection</Badge>
+                {seller.whatsappConnected ? (
+                  <Pulse label="CONNECTED" />
+                ) : (
+                  <Badge tone="neutral">Not connected</Badge>
                 )}
-                <Button
-                  variant={whatsappConnected ? "outline" : "primary"}
-                  size="sm"
-                  onClick={() => setWhatsappConnected((v) => !v)}
-                >
-                  {whatsappConnected ? "Disconnect" : "Connect now"}
-                </Button>
               </div>
             </div>
 
-            {!whatsappConnected && (
-              <div className="mt-4 rounded-xl border border-dashed border-line bg-paper-deep p-4">
-                <p className="text-sm text-ink-soft">
-                  To connect this seller, register their phone number (
-                  <strong>{seller.whatsappNumber || "not provided"}</strong>) on
-                  your WhatsApp Business Account via the Meta Cloud API
-                  Coexistence endpoint.
-                </p>
-              </div>
-            )}
+            <div className="rounded-xl border border-line bg-paper-deep p-4">
+              <p className="text-xs text-ink-soft">
+                Registered WhatsApp Business phone number:{" "}
+                <strong className="text-ink font-mono">{seller.whatsappNumber || "Not provided"}</strong>.
+                {seller.whatsappConnected
+                  ? " WhatsApp auto-reply agent is active and running concurrently."
+                  : " Seller can connect via QR scanner in their store setup dashboard."}
+              </p>
+            </div>
           </CardBody>
         </Card>
       </div>
 
-      {/* Catalogue */}
+      {/* Knowledge & Data Section */}
       <div className="mt-6">
-        <Card>
+        <Card className="bg-card-strong">
           <CardHeader
-            title="Catalogue"
-            description={`${sellerProducts.length} products`}
+            title="Knowledge & Data"
+            description={`${knowledgeItems.length} trained knowledge sources`}
           />
           <CardBody className="pt-4">
-            {sellerProducts.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-line bg-paper px-4 py-8 text-center">
-                <p className="text-sm text-ink-soft">
-                  This seller hasn&apos;t added any products yet.
+            {knowledgeItems.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-line bg-paper px-4 py-12 text-center space-y-2">
+                <span className="text-3xl">📂</span>
+                <p className="text-sm font-semibold text-ink">No knowledge added yet</p>
+                <p className="text-xs text-ink-soft">
+                  This seller hasn&apos;t added any website URLs, catalogue spreadsheets, or Q&A items yet.
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {sellerProducts.map((p) => (
+              <div className="space-y-3">
+                {knowledgeItems.map((item) => (
                   <div
-                    key={p.id}
-                    className="flex items-start gap-3 rounded-lg border border-line bg-paper px-4 py-3"
+                    key={item.id}
+                    className="flex items-center gap-3.5 rounded-xl border border-line bg-paper p-4"
                   >
-                    <span className="mt-0.5 text-xl">{p.photo}</span>
+                    <span className="text-2xl shrink-0">
+                      {item.type === "website" ? "🌐" : item.type === "document" ? "📄" : "❓"}
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-ink">{p.name}</p>
-                      <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
-                        {p.discountPrice ? (
-                          <>
-                            <span className="text-teal font-semibold">
-                              {formatPKR(p.discountPrice)}
-                            </span>
-                            <span className="text-ink-faint line-through">
-                              {formatPKR(p.price)}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-ink-soft">
-                            {formatPKR(p.price)}
-                          </span>
-                        )}
-                        <span className="text-ink-faint">· {p.category}</span>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-bold text-ink">{item.name}</p>
+                        <Badge tone="teal" className="capitalize text-[10px]">
+                          {item.type}
+                        </Badge>
                       </div>
-                      {p.description && (
-                        <p className="mt-1 text-xs text-ink-soft line-clamp-1">
-                          {p.description}
-                        </p>
-                      )}
+                      <p className="mt-1 text-xs text-ink-soft line-clamp-2 font-mono">
+                        {(() => {
+                          if (item.content.trim().startsWith('{"headers":') && item.content.trim().endsWith('}')) {
+                            try {
+                              const parsed = JSON.parse(item.content);
+                              if (parsed && Array.isArray(parsed.headers)) {
+                                return `Spreadsheet dataset with columns: ${parsed.headers.join(", ")}`;
+                              }
+                            } catch (e) {}
+                          }
+                          return item.content;
+                        })()}
+                      </p>
                     </div>
-                    <Badge tone={p.inStock ? "live" : "neutral"}>
-                      {p.inStock ? "In stock" : "Sold out"}
-                    </Badge>
                   </div>
                 ))}
               </div>
@@ -199,14 +235,14 @@ export default function SellerDetailPage() {
 
       {/* Policies */}
       <div className="mt-6">
-        <Card>
-          <CardHeader title="Policies" />
+        <Card className="bg-card-strong">
+          <CardHeader title="Policies & Store Profile" />
           <CardBody className="space-y-3 pt-4">
             {(
               [
-                ["Delivery", policies.delivery],
-                ["Returns", policies.returns],
-                ["Hours", policies.hours],
+                ["Delivery Policy", policies.delivery],
+                ["Return Policy", policies.returns],
+                ["Operating Hours", policies.hours],
               ] as const
             ).map(([label, value]) => (
               <div key={label}>
@@ -217,6 +253,6 @@ export default function SellerDetailPage() {
           </CardBody>
         </Card>
       </div>
-    </>
+    </div>
   );
 }

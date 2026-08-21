@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 interface DemoModeContextType {
   demoMode: boolean;
@@ -11,7 +12,8 @@ interface DemoModeContextType {
 const DemoModeContext = createContext<DemoModeContextType | undefined>(undefined);
 
 export function DemoModeProvider({ children }: { children: React.ReactNode }) {
-  const [demoMode, setDemoModeState] = useState<boolean>(true);
+  const { user } = useAuth();
+  const [demoMode, setDemoModeState] = useState<boolean>(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -19,9 +21,9 @@ export function DemoModeProvider({ children }: { children: React.ReactNode }) {
     if (stored !== null) {
       setDemoModeState(stored === "true");
     } else {
-      // Default to demo mode true so new logins have populated metrics
-      window.localStorage.setItem("deosai_demo_mode", "true");
-      setDemoModeState(true);
+      // Default to false (Live Mode) for production
+      window.localStorage.setItem("deosai_demo_mode", "false");
+      setDemoModeState(false);
     }
     setMounted(true);
   }, []);
@@ -45,8 +47,11 @@ export function DemoModeProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
+  // For regular sellers in production, force live mode (demoMode = false). Only admins can toggle demoMode.
+  const isEffectiveDemoMode = mounted && user?.role === "admin" ? demoMode : false;
+
   return (
-    <DemoModeContext.Provider value={{ demoMode: mounted ? demoMode : true, setDemoMode }}>
+    <DemoModeContext.Provider value={{ demoMode: isEffectiveDemoMode, setDemoMode }}>
       {children}
     </DemoModeContext.Provider>
   );
@@ -62,6 +67,12 @@ export function useDemoMode() {
 
 export function DemoModeSwitch() {
   const { demoMode, setDemoMode } = useDemoMode();
+  const { user } = useAuth();
+
+  // Only render the Live Mode / Demo Mode toggle for sellers with role 'admin'
+  if (user?.role !== "admin") {
+    return null;
+  }
 
   return (
     <button

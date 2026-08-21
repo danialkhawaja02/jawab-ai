@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
@@ -13,6 +13,27 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { user, loading, signOut } = useAuth();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [waStatus, setWaStatus] = useState<'disconnected' | 'initializing' | 'qr_ready' | 'connected'>('disconnected');
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkWaStatus = async () => {
+      try {
+        const res = await fetch("/api/whatsapp/status");
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setWaStatus(data.status || "disconnected");
+        }
+      } catch {}
+    };
+
+    checkWaStatus();
+    const interval = setInterval(checkWaStatus, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -72,7 +93,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="mt-4 rounded-3xl border border-line bg-paper px-4 py-3 shadow-sm">
           <p className="truncate text-sm font-bold text-ink">{user.businessName}</p>
-          <Pulse label="connected" tone="live" className="mt-2 text-ink-soft" />
+          {waStatus === "connected" ? (
+            <Pulse label="CONNECTED" tone="live" className="mt-2 text-ink-soft" />
+          ) : waStatus === "qr_ready" ? (
+            <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-warning">
+              <span className="h-2 w-2 rounded-full bg-warning animate-pulse" />
+              Scan QR
+            </div>
+          ) : waStatus === "initializing" ? (
+            <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-warning">
+              <span className="h-2 w-2 rounded-full bg-warning animate-pulse" />
+              Initializing
+            </div>
+          ) : (
+            <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-ink-faint">
+              <span className="h-2 w-2 rounded-full bg-ink-faint" />
+              Disconnected
+            </div>
+          )}
         </div>
         <div className="mt-6">{navList}</div>
         <button

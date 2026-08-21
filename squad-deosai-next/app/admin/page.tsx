@@ -1,48 +1,77 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { Card, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Pulse } from "@/components/ui/Pulse";
-import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
-import { cn } from "@/lib/utils";
-import { allSellers, type Seller } from "@/lib/mock-data";
+
+export interface AdminSeller {
+  id: string;
+  businessName: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  plan: string;
+  role: string;
+  industry: string;
+  whatsappNumber: string;
+  whatsappConnected: boolean;
+  whatsappStatus: 'disconnected' | 'initializing' | 'qr_ready' | 'connected';
+  memberSince: string;
+  onboarded: boolean;
+}
 
 export default function AdminSellersPage() {
-  const [sellers, setSellers] = useState<Seller[]>(allSellers);
+  const [sellers, setSellers] = useState<AdminSeller[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+
+  const fetchSellers = async () => {
+    try {
+      const res = await fetch('/api/admin/sellers');
+      if (res.ok) {
+        const data = await res.json();
+        setSellers(data.sellers || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch sellers for admin", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSellers();
+    const interval = setInterval(fetchSellers, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const filtered = sellers.filter(
     (s) =>
       s.businessName.toLowerCase().includes(search.toLowerCase()) ||
-      s.email.toLowerCase().includes(search.toLowerCase())
+      s.email.toLowerCase().includes(search.toLowerCase()) ||
+      s.phone.toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleWhatsApp = (id: string) => {
-    setSellers((list) =>
-      list.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              whatsappConnected: !s.whatsappConnected,
-              whatsappRequested: false,
-            }
-          : s
-      )
-    );
-  };
-
   const connectedCount = sellers.filter((s) => s.whatsappConnected).length;
-  const requestedCount = sellers.filter((s) => s.whatsappRequested).length;
+  const notConnectedCount = sellers.length - connectedCount;
+
+  if (loading) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center bg-paper font-landing">
+        <Pulse label="Fetching live sellers data..." />
+      </div>
+    );
+  }
 
   return (
-    <>
+    <div className="font-landing">
       <PageHeader
         title="All sellers"
-        description={`${sellers.length} registered · ${connectedCount} connected · ${requestedCount} requesting connection`}
+        description={`${sellers.length} registered · ${connectedCount} connected · ${notConnectedCount} not connected`}
       />
 
       {/* search */}
@@ -63,36 +92,40 @@ export default function AdminSellersPage() {
         {filtered.length === 0 ? (
           <Card>
             <CardBody className="py-14 text-center">
-              <p className="text-sm text-ink-soft">No sellers match your search.</p>
+              <p className="text-sm text-ink-soft">
+                {sellers.length === 0
+                  ? "No sellers found in the database."
+                  : "No sellers match your search."}
+              </p>
             </CardBody>
           </Card>
         ) : (
           filtered.map((seller) => (
-            <Card key={seller.id}>
+            <Card key={seller.id} className="bg-card-strong">
               <CardBody className="flex flex-wrap items-center gap-4">
                 {/* avatar */}
-                <div className="grid h-11 w-11 flex-none place-items-center rounded-full bg-paper-deep font-display text-sm text-ink">
-                  {seller.businessName.charAt(0)}
+                <div className="grid h-11 w-11 flex-none place-items-center rounded-full bg-paper-deep font-display text-sm text-ink font-bold border border-line">
+                  {(seller.businessName || "S").charAt(0).toUpperCase()}
                 </div>
 
                 {/* info */}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-ink">
+                    <p className="text-sm font-bold text-ink">
                       {seller.businessName}
                     </p>
-                    {seller.whatsappConnected && (
-                      <Pulse label="connected" />
-                    )}
-                    {!seller.whatsappConnected && seller.whatsappRequested && (
-                      <Badge tone="attention">Requesting connection</Badge>
-                    )}
-                    {!seller.whatsappConnected && !seller.whatsappRequested && (
+                    {seller.whatsappConnected ? (
+                      <Pulse label="CONNECTED" />
+                    ) : seller.whatsappStatus === 'qr_ready' ? (
+                      <Badge tone="marigold">QR Ready</Badge>
+                    ) : seller.whatsappStatus === 'initializing' ? (
+                      <Badge tone="marigold">Initializing...</Badge>
+                    ) : (
                       <Badge tone="neutral">Not connected</Badge>
                     )}
                   </div>
                   <p className="mt-0.5 text-xs text-ink-soft">
-                    {seller.ownerName} · {seller.email} · {seller.phone}
+                    {seller.ownerName !== '—' ? `${seller.ownerName} · ` : ""}{seller.email} {seller.phone !== 'No phone' ? `· ${seller.phone}` : ""}
                   </p>
                   <p className="mt-0.5 font-mono text-xs text-ink-faint">
                     Member since {seller.memberSince}
@@ -104,25 +137,9 @@ export default function AdminSellersPage() {
 
                 {/* actions */}
                 <div className="flex items-center gap-2 flex-none">
-                  {seller.whatsappConnected ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => toggleWhatsApp(seller.id)}
-                    >
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={() => toggleWhatsApp(seller.id)}
-                    >
-                      Connect WA
-                    </Button>
-                  )}
                   <Link
                     href={`/admin/sellers/${seller.id}`}
-                    className="rounded-lg px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-teal-soft hover:text-teal"
+                    className="rounded-lg border border-line bg-card px-4 py-2 text-xs font-semibold text-ink transition-colors hover:bg-paper shadow-sm"
                   >
                     View →
                   </Link>
@@ -132,6 +149,6 @@ export default function AdminSellersPage() {
           ))
         )}
       </div>
-    </>
+    </div>
   );
 }
