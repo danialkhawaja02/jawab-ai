@@ -4,10 +4,10 @@ import { createClient } from '@supabase/supabase-js';
 import { generateGroundedReply } from '@/lib/ai/generate-reply';
 import type { AgentConfigRow, ProductRow, SellerRow } from '@/lib/ai/types';
 
-// Initialize Supabase client lazily using env variables to bypass Next.js request context restrictions
+// Initialize Supabase client lazily inside function scope to avoid build-time context evaluation issues
 function getSupabaseClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
   return createClient(supabaseUrl, supabaseKey);
 }
 
