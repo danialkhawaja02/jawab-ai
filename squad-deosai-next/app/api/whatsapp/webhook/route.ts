@@ -13,6 +13,7 @@ import type { IncomingWhatsAppMessage } from "@/lib/whatsapp/types";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type MetaWebhookPayload = {
   entry?: Array<{

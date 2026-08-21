@@ -35,10 +35,13 @@ export interface DBOrder {
   created_at: string;
 }
 
-const supabase = createClient();
+function getSupabase() {
+  return createClient();
+}
 
 /** Fetch all conversations for a seller */
 export async function fetchConversations(sellerId: string): Promise<DBConversation[]> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("conversations")
     .select("*")
@@ -54,6 +57,7 @@ export async function fetchConversations(sellerId: string): Promise<DBConversati
 
 /** Fetch messages for a specific conversation */
 export async function fetchMessages(sellerId: string, conversationId: string): Promise<DBMessage[]> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("messages")
     .select("*")
@@ -76,6 +80,7 @@ export async function insertMessage(
   senderType: "customer" | "bot" | "seller" | "system",
   read: boolean = false
 ): Promise<DBMessage> {
+  const supabase = getSupabase();
   // 1. Insert message row
   const { data, error } = await supabase
     .from("messages")
@@ -114,6 +119,7 @@ export async function updateConversationStatus(
   conversationId: string,
   status: "needs-you" | "auto-replied" | "ordered"
 ): Promise<void> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("conversations")
     .update({ status })
@@ -131,6 +137,7 @@ export async function markConversationAsRead(
   sellerId: string,
   conversationId: string
 ): Promise<void> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("conversations")
     .update({ unread_count: 0 })
@@ -144,6 +151,7 @@ export async function markConversationAsRead(
 
 /** Fetch all orders for a seller */
 export async function fetchOrders(sellerId: string): Promise<DBOrder[]> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("orders")
     .select("*")
@@ -166,6 +174,7 @@ export async function updateOrderStatus(
   // Map internal status string if needed (database uses 'pending_confirmation', 'confirmed', 'cancelled')
   const dbStatus = status === "pending" ? "pending_confirmation" : status;
   
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("orders")
     .update({ status: dbStatus, updated_at: new Date().toISOString() })
@@ -180,6 +189,7 @@ export async function updateOrderStatus(
 
 /** Helper to clear all conversations, messages, and orders for a seller in Supabase */
 export async function clearDatabase(sellerId: string): Promise<void> {
+  const supabase = getSupabase();
   await supabase.from("messages").delete().eq("seller_id", sellerId);
   await supabase.from("orders").delete().eq("seller_id", sellerId);
   await supabase.from("conversations").delete().eq("seller_id", sellerId);
@@ -187,6 +197,7 @@ export async function clearDatabase(sellerId: string): Promise<void> {
 
 /** Helper to seed realistic demo data directly inside Supabase for live testing */
 export async function seedDatabase(sellerId: string): Promise<void> {
+  const supabase = getSupabase();
   // 1. Delete existing records for this seller to allow clean re-runs
   await clearDatabase(sellerId);
 

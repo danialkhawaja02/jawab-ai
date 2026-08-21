@@ -5,6 +5,8 @@ import { logger } from '@/lib/logger';
 import { whatsappSendSchema } from '@/lib/validations/api';
 import { createClient } from '@/lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: Request) {
   try {
     let rawBody;

@@ -3,6 +3,8 @@ import { logoutWhatsAppClient } from '@/lib/whatsapp/client';
 import { createClient } from '@/lib/supabase/server';
 import { logger } from '@/lib/logger';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();

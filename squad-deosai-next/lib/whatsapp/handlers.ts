@@ -4,10 +4,12 @@ import { createClient } from '@supabase/supabase-js';
 import { generateGroundedReply } from '@/lib/ai/generate-reply';
 import type { AgentConfigRow, ProductRow, SellerRow } from '@/lib/ai/types';
 
-// Initialize Supabase client using env variables to bypass Next.js request context restrictions
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize Supabase client lazily using env variables to bypass Next.js request context restrictions
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
+  return createClient(supabaseUrl, supabaseKey);
+}
 
 const DEFAULT_CONFIG: Omit<AgentConfigRow, "seller_id"> = {
   agent_prompt: "You are a helpful customer support assistant.",
@@ -24,6 +26,8 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
   try {
     // Ignore messages sent by the bot itself
     if (msg.fromMe) return;
+
+    const supabase = getSupabaseClient();
 
     const messageText = msg.body;
     logger.info(`[WhatsApp] 📥 Received message from ${msg.from} (Seller ID: ${sellerId}): "${messageText}"`);

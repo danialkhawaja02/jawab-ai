@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server';
 import { logger } from '@/lib/logger';
 import { whatsappConnectSchema } from '@/lib/validations/api';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
   try {
     // Optional body validation

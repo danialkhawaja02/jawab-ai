@@ -12,6 +12,7 @@ import { logger } from "@/lib/logger";
 import { aiReplySchema } from "@/lib/validations/api";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const DEFAULT_CONFIG: Omit<AgentConfigRow, "seller_id"> = {
   agent_prompt: "You are a helpful customer support assistant.",
