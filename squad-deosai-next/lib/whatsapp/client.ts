@@ -25,27 +25,34 @@ export interface WhatsAppClientState {
 export const whatsappClients = new Map<string, WhatsAppClientState>();
 
 function getPuppeteerExecutablePath(): string | undefined {
+  // Environment variable takes priority
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
     logger.info(`[WhatsApp] Using PUPPETEER_EXECUTABLE_PATH: ${process.env.PUPPETEER_EXECUTABLE_PATH}`);
     return process.env.PUPPETEER_EXECUTABLE_PATH;
   }
+  
+  // Windows path
   if (process.platform === 'win32') {
     return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   }
+  
+  // Linux paths - check in order of preference
   const knownLinuxPaths = [
-    '/nix/store/bin/chromium', // Nixpacks default
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
+    '/nix/store/bin/chromium',      // Nixpacks standard
+    '/usr/bin/chromium',             // Debian/Ubuntu
+    '/usr/bin/chromium-browser',     // Debian/Ubuntu alternative
+    '/usr/bin/google-chrome',        // Google Chrome
+    '/usr/bin/google-chrome-stable', // Google Chrome stable
   ];
+  
   for (const p of knownLinuxPaths) {
     if (fs.existsSync(p)) {
       logger.info(`[WhatsApp] Found Linux Chromium binary at: ${p}`);
       return p;
     }
   }
-  logger.warn('[WhatsApp] No Chromium binary found. Puppeteer will attempt to download one.');
+  
+  logger.warn('[WhatsApp] No Chromium binary found in standard paths. Puppeteer will attempt to download.');
   return undefined;
 }
 
@@ -61,7 +68,7 @@ async function cleanupWhatsAppSession(sellerId: string) {
     }
   }
 
-  // Kill stray headless chrome processes
+  // Kill stray headless chrome/chromium processes
   if (process.platform === 'win32') {
     try {
       await execPromise('wmic process where "name=\'chrome.exe\' and commandline like \'%headless%\'" call terminate');
@@ -88,12 +95,12 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
   await cleanupWhatsAppSession(sellerId);
 
   const executablePath = getPuppeteerExecutablePath();
-  logger.info(`[WhatsApp] Using executable path: ${executablePath || 'default (Puppeteer will download)'}`);
+  logger.info(`[WhatsApp] Platform: ${process.platform}, Using executable path: ${executablePath || 'default (Puppeteer will download)'}`);
 
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sellerId }),
     puppeteer: {
-      executablePath: executablePath,
+      ...(executablePath && { executablePath }),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -122,6 +129,7 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
       const qrDataUrl = await qrcode.toDataURL(qr);
       state.status = 'qr_ready';
       state.qrDataUrl = qrDataUrl;
+      logger.info(`[WhatsApp] QR data URL set for seller ${sellerId}`);
     } catch (err) {
       logger.error('[WhatsApp] Failed to generate QR data URL:', err);
     }
@@ -157,6 +165,7 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
   try {
     logger.info(`[WhatsApp] Calling client.initialize() for seller ${sellerId}...`);
     await client.initialize();
+    logger.info(`[WhatsApp] Client.initialize() completed for seller ${sellerId}`);
   } catch (err) {
     logger.error(`[WhatsApp] Failed to initialize for seller ${sellerId}:`, err);
     state.status = 'disconnected';
