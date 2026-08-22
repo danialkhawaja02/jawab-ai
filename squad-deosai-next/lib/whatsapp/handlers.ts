@@ -95,14 +95,26 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
     let agentName = "";
     let whatsappNumber = "";
 
-    const obData = obItem ? JSON.parse(obItem.content) : null;
+    let obData: any = null;
+    if (obItem) {
+      try {
+        obData = typeof obItem.content === "string" ? JSON.parse(obItem.content) : obItem.content;
+      } catch {}
+    }
+
     if (obData) {
       try {
+        const rawCharges = obData.deliveryCharges ? String(obData.deliveryCharges).trim() : "";
+        const formattedCharges = rawCharges
+          ? (/pkr|rs/i.test(rawCharges) ? rawCharges : `PKR ${rawCharges}`)
+          : "";
+
         compiledPolicies = [
-          obData.deliveryCharges ? `Delivery charges: ${obData.deliveryCharges}` : "",
+          formattedCharges ? `Delivery charges: ${formattedCharges}` : "",
           obData.deliveryTime ? `Delivery time: ${obData.deliveryTime}` : "",
           obData.returnPolicy ? `Return policy: ${obData.returnPolicy}` : "",
         ].filter(Boolean).join(" | ");
+
         agentName = obData.agentName || "";
         whatsappNumber = obData.whatsappNumber || "";
       } catch {}
@@ -110,16 +122,24 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
 
     const seller: SellerRow & { policies?: string; agent_name?: string; whatsapp_number?: string } = {
       ...sellerData,
+      business_name: obData?.businessName || sellerData?.business_name || "Store",
+      industry: obData?.category || sellerData?.industry || null,
       policies: compiledPolicies,
       agent_name: agentName,
       whatsapp_number: whatsappNumber,
     } as any;
 
     const baseConfig = remoteConfig || { seller_id: sellerId, ...DEFAULT_CONFIG };
+    const toneList = Array.isArray(baseConfig.tone_guidelines) ? [...baseConfig.tone_guidelines] : [...DEFAULT_CONFIG.tone_guidelines];
+    if (obData?.aiTone && !toneList.some(t => t.toLowerCase().includes(String(obData.aiTone).toLowerCase()))) {
+      toneList.push(`Tone: ${obData.aiTone}`);
+    }
+
     const config: AgentConfigRow = {
       ...baseConfig,
       knowledge_items: Array.isArray(baseConfig.knowledge_items) ? baseConfig.knowledge_items : [],
-      tone_guidelines: Array.isArray(baseConfig.tone_guidelines) ? baseConfig.tone_guidelines : DEFAULT_CONFIG.tone_guidelines,
+      tone_guidelines: toneList,
+      hinglish_support: baseConfig.hinglish_support ?? (obData?.aiLanguage === "urdu-english" || obData?.aiLanguage === "urdu" || true),
     } as any;
 
     let products = (productsResult.data || []) as ProductRow[];
@@ -342,8 +362,15 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
     });
 
     if (aiResponse.reply) {
+      registerBotSentReply(sellerId, aiResponse.reply);
       logger.info(`[WhatsApp] 📤 AI Reply generated: "${aiResponse.reply}"`);
-      await msg.reply(aiResponse.reply);
+      const sentMsg = await msg.reply(aiResponse.reply);
+      if (sentMsg?.id?.id) {
+        recentBotMessageIds.add(sentMsg.id.id);
+      }
+      if (sentMsg?.id?._serialized) {
+        recentBotMessageIds.add(sentMsg.id._serialized);
+      }
       logger.info(`[WhatsApp] ✅ Reply successfully sent to ${msg.from}`);
 
       if (conversation) {
@@ -357,17 +384,133 @@ export async function handleIncomingMessage(msg: Message, sellerId: string) {
             read: true
           });
 
+        const finalStatus = aiResponse.action === 'handoff' ? 'needs-you' : 'auto-replied';
+
         await supabase
           .from('conversations')
           .update({
-            status: 'auto-replied',
+            status: finalStatus,
             last_message_at: new Date().toISOString(),
           })
-          .eq('eq', conversation.id);
+          .eq('id', conversation.id);
       }
     }
 
   } catch (error) {
     logger.error(`[WhatsApp] ❌ Error handling message for seller ${sellerId}:`, error);
+  }
+}
+
+const recentBotMessageIds = new Set<string>();
+const recentBotTexts = new Map<string, number>();
+
+function registerBotSentReply(sellerId: string, replyText: string) {
+  const key = `${sellerId}:${replyText.trim()}`;
+  recentBotTexts.set(key, Date.now());
+  setTimeout(() => {
+    recentBotTexts.delete(key);
+  }, 30000);
+}
+
+function isRecentBotReply(sellerId: string, replyText: string): boolean {
+  const key = `${sellerId}:${replyText.trim()}`;
+  const timestamp = recentBotTexts.get(key);
+  if (timestamp && Date.now() - timestamp < 30000) {
+    return true;
+  }
+  return false;
+}
+
+export async function handleOutgoingMobileMessage(msg: Message, sellerId: string) {
+  try {
+    if (!msg.fromMe) return;
+
+    const messageText = msg.body ? msg.body.trim() : "";
+    if (!messageText) return;
+
+    // Check 1: Message ID matching
+    if (msg.id?.id && recentBotMessageIds.has(msg.id.id)) {
+      recentBotMessageIds.delete(msg.id.id);
+      return;
+    }
+    if (msg.id?._serialized && recentBotMessageIds.has(msg.id._serialized)) {
+      recentBotMessageIds.delete(msg.id._serialized);
+      return;
+    }
+
+    // Check 2: In-memory bot reply text tracking
+    if (isRecentBotReply(sellerId, messageText)) {
+      logger.info(`[WhatsApp Mobile Outbound] 🤖 Ignored bot sent reply matching recentBotTexts: "${messageText}"`);
+      return;
+    }
+
+    logger.info(`[WhatsApp Mobile Outbound] 📱 Sent message from mobile to ${msg.to} (Seller ID: ${sellerId}): "${messageText}"`);
+
+    const supabase = getSupabaseClient();
+    const rawToUser = msg.to ? msg.to.split('@')[0] : '';
+    let cleanPhone = rawToUser.replace(/[^0-9]/g, '');
+
+    if (cleanPhone.startsWith('03') && cleanPhone.length === 11) {
+      cleanPhone = '92' + cleanPhone.substring(1);
+    } else if (cleanPhone.startsWith('3') && cleanPhone.length === 10) {
+      cleanPhone = '92' + cleanPhone;
+    }
+    const customerPhoneStr = '+' + cleanPhone;
+
+    // Find active conversation for this customer
+    const { data: conversation } = await supabase
+      .from('conversations')
+      .select('id, unread_count, status')
+      .eq('seller_id', sellerId)
+      .or(`external_id.eq.${msg.to},customer_phone.eq.${customerPhoneStr}`)
+      .maybeSingle();
+
+    if (conversation) {
+      // Check 3: DB record check to verify if a bot message with exact content was recently created
+      const { data: existingBotMsg } = await supabase
+        .from('messages')
+        .select('id, created_at')
+        .eq('seller_id', sellerId)
+        .eq('conversation_id', conversation.id)
+        .eq('sender_type', 'bot')
+        .eq('content', messageText)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingBotMsg) {
+        const diffMs = Date.now() - new Date(existingBotMsg.created_at).getTime();
+        if (diffMs < 30000) {
+          logger.info(`[WhatsApp Mobile Outbound] 🤖 Ignored bot reply matching DB record: "${messageText}"`);
+          return;
+        }
+      }
+
+      // 1. Insert seller mobile reply into messages table
+      await supabase
+        .from('messages')
+        .insert({
+          seller_id: sellerId,
+          conversation_id: conversation.id,
+          sender_type: 'seller',
+          content: messageText,
+          read: true,
+          created_at: new Date().toISOString()
+        });
+
+      // 2. Transfer conversation status to 'auto-replied' (moves chat to 'Replied' tab!)
+      await supabase
+        .from('conversations')
+        .update({
+          status: 'auto-replied',
+          last_message_at: new Date().toISOString(),
+          unread_count: 0
+        })
+        .eq('id', conversation.id);
+
+      logger.info(`[WhatsApp Mobile Outbound] ✅ Updated conversation ${conversation.id} status to 'auto-replied' and inserted seller mobile reply.`);
+    }
+  } catch (error) {
+    logger.error(`[WhatsApp Mobile Outbound] ❌ Error handling mobile message for seller ${sellerId}:`, error);
   }
 }

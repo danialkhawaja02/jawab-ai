@@ -120,11 +120,16 @@ export async function POST(request: Request) {
     let agentName = "";
     let whatsappNumber = "";
 
-    const obData = body.onboardingOverride || (obItem ? JSON.parse(obItem.content) : null);
+    const obData = body.onboardingOverride || (obItem ? (typeof obItem.content === "string" ? JSON.parse(obItem.content) : obItem.content) : null);
     if (obData) {
       try {
+        const rawCharges = obData.deliveryCharges ? String(obData.deliveryCharges).trim() : "";
+        const formattedCharges = rawCharges
+          ? (/pkr|rs/i.test(rawCharges) ? rawCharges : `PKR ${rawCharges}`)
+          : "";
+
         compiledPolicies = [
-          obData.deliveryCharges ? `Delivery charges: ${obData.deliveryCharges}` : "",
+          formattedCharges ? `Delivery charges: ${formattedCharges}` : "",
           obData.deliveryTime ? `Delivery time: ${obData.deliveryTime}` : "",
           obData.returnPolicy ? `Return policy: ${obData.returnPolicy}` : "",
         ].filter(Boolean).join(" | ");
@@ -135,19 +140,25 @@ export async function POST(request: Request) {
 
     const seller: SellerRow & { policies?: string; agent_name?: string; whatsapp_number?: string } = {
       ...sellerData,
-      business_name: body.onboardingOverride?.businessName || sellerData.business_name,
-      industry: body.onboardingOverride?.category || sellerData.industry,
+      business_name: body.onboardingOverride?.businessName || obData?.businessName || sellerData.business_name,
+      industry: body.onboardingOverride?.category || obData?.category || sellerData.industry,
       policies: compiledPolicies,
       agent_name: agentName,
       whatsapp_number: whatsappNumber,
     } as any;
 
     const baseConfig = remoteConfig || { seller_id: user.id, ...DEFAULT_CONFIG };
+    const toneList = body.configOverride?.tone_guidelines || (Array.isArray(baseConfig.tone_guidelines) ? [...baseConfig.tone_guidelines] : [...DEFAULT_CONFIG.tone_guidelines]);
+    if (obData?.aiTone && !toneList.some((t: string) => t.toLowerCase().includes(String(obData.aiTone).toLowerCase()))) {
+      toneList.push(`Tone: ${obData.aiTone}`);
+    }
+
     const config: AgentConfigRow = {
       ...baseConfig,
       ...(body.configOverride || {}),
       knowledge_items: body.configOverride?.knowledge_items || (Array.isArray(baseConfig.knowledge_items) ? baseConfig.knowledge_items : []),
-      tone_guidelines: body.configOverride?.tone_guidelines || (Array.isArray(baseConfig.tone_guidelines) ? baseConfig.tone_guidelines : DEFAULT_CONFIG.tone_guidelines),
+      tone_guidelines: toneList,
+      hinglish_support: body.configOverride?.hinglish_support ?? baseConfig.hinglish_support ?? (obData?.aiLanguage === "urdu-english" || obData?.aiLanguage === "urdu" || true),
     } as any;
       
     // If Supabase ilike query returned products, use them. 

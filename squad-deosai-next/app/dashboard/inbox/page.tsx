@@ -42,9 +42,6 @@ export default function InboxPage() {
   const [activeId, setActiveId] = useState<string>("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "needs-you" | "replied">("all");
-  const [draft, setDraft] = useState("");
-  const [agentDraft, setAgentDraft] = useState("");
-  const [isDrafting, setIsDrafting] = useState(false);
   const [loadingLive, setLoadingLive] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [toast, setToast] = useState<{message: string; visible: boolean}>({ message: "", visible: false });
@@ -52,12 +49,14 @@ export default function InboxPage() {
 
   const activeChat = conversations.find((c) => c.id === activeId);
 
-  // Sync data on mount
-  const loadConversations = async () => {
+  // Sync data on mount or via realtime
+  const loadConversations = async (silent = false) => {
     if (!user) return;
 
     try {
-      setLoadingLive(true);
+      if (!silent && conversations.length === 0) {
+        setLoadingLive(true);
+      }
       const dbConvs = await fetchConversations(user.id);
       const mappedConvs: Conversation[] = [];
 
@@ -72,7 +71,7 @@ export default function InboxPage() {
         const mappedMsgs: Message[] = dbMsgs.map((m) => ({
           id: m.id,
           sender: m.sender_type === "system" ? "bot" : (m.sender_type as "customer" | "bot" | "seller"),
-          content: m.content,
+          content: m.content || (m as any).body || "",
           createdAt: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         }));
 
@@ -119,8 +118,12 @@ export default function InboxPage() {
         setToast({ message: "New message received!", visible: true });
         setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
       }
-      loadConversations();
+      loadConversations(true);
     }
+  });
+
+  useSupabaseRealtime("conversations", user ? `seller_id=eq.${user.id}` : null, () => {
+    loadConversations(true);
   });
 
   // Seeding button trigger
@@ -155,59 +158,6 @@ export default function InboxPage() {
     return true;
   });
 
-  // Handle manual reply send via API
-  const handleSendReply = async () => {
-    if (!draft.trim() || !activeChat || !user) return;
-
-    const messageToSend = draft.trim();
-    setDraft("");
-    setAgentDraft("");
-
-    // Optimistically append message to local state
-    const optimisticMsg: Message = {
-      id: `temp_${Date.now()}`,
-      sender: "seller",
-      content: messageToSend,
-      createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
-
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === activeChat.id
-          ? {
-              ...c,
-              lastMessageAt: optimisticMsg.createdAt,
-              messages: [...c.messages, optimisticMsg],
-            }
-          : c
-      )
-    );
-
-    try {
-      const res = await fetch("/api/whatsapp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sellerId: user.id,
-          conversationId: activeChat.id,
-          customerPhone: activeChat.customerPhone,
-          message: messageToSend
-        }),
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || "Failed to send message via API");
-      }
-
-      await loadConversations();
-    } catch (err: any) {
-      console.error("Failed to send outbound message:", err);
-      alert(`Failed to send message: ${err.message || "Please try again."}`);
-      await loadConversations();
-    }
-  };
-
   const handleSelectChat = async (chat: Conversation) => {
     setActiveId(chat.id);
     if (chat.unreadCount > 0 && user) {
@@ -222,32 +172,6 @@ export default function InboxPage() {
         console.error("Failed to mark chat as read:", err);
       });
     }
-  };
-
-  // Ask AI Agent to draft reply
-  const handleAskAgent = () => {
-    if (!activeChat) return;
-    setIsDrafting(true);
-    setAgentDraft("");
-
-    setTimeout(() => {
-      let draftText = "";
-      
-      // Live Mode generic prompt draft builder based on last customer question
-      const lastCustMsg = [...activeChat.messages].reverse().find(m => m.sender === "customer");
-      const promptSeed = lastCustMsg ? lastCustMsg.content.toLowerCase() : "";
-      
-      if (promptSeed.includes("price") || promptSeed.includes("kya rate") || promptSeed.includes("charges")) {
-        draftText = "Assalam o alaikum! We will check the price details for your requested jewelry items and get back to you shortly. Shipping is a flat Rs. 150.";
-      } else if (promptSeed.includes("delivery") || promptSeed.includes("deliver")) {
-        draftText = "Assalam o alaikum! Yes, we deliver nationwide in Pakistan within 2-3 working days. Leopards COD option is fully available.";
-      } else {
-        draftText = "Wa alaikum assalam! Let me check this catalog detail for you. I will reply here in just a minute.";
-      }
-      
-      setDraft(draftText);
-      setIsDrafting(false);
-    }, 800);
   };
 
   const statusMeta = {
@@ -468,47 +392,6 @@ export default function InboxPage() {
                   );
                 })}
                 <div ref={chatEndRef} />
-              </div>
-
-              {/* Action/Input Block */}
-              <div className="border-t border-line bg-card-strong p-4 space-y-3">
-                <div className="flex items-end gap-2">
-                  <textarea
-                    placeholder="Type a reply... (Press Enter to send)"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendReply();
-                      }
-                    }}
-                    rows={2}
-                    className="flex-1 min-h-0 text-xs border border-line rounded-xl px-3 py-2.5 bg-paper/20 focus:bg-card-strong focus:outline-none focus:ring-1 focus:ring-teal resize-none"
-                  />
-                  <div className="flex flex-col gap-2 shrink-0">
-                    <button
-                      onClick={handleSendReply}
-                      disabled={!draft.trim()}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-teal text-white hover:bg-teal-bright disabled:opacity-40 transition-colors shadow-sm"
-                      title="Send message"
-                    >
-                      ➔
-                    </button>
-                    <button
-                      onClick={handleAskAgent}
-                      disabled={isDrafting}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-teal text-teal hover:bg-teal-soft/20 disabled:opacity-40 transition-colors"
-                      title="Ask AI to draft reply"
-                    >
-                      {isDrafting ? "⌛" : "✦"}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-ink-faint px-1">
-                  <span>Owner replies send immediately via WhatsApp Cloud APIs.</span>
-                  <span>Click <strong>✦</strong> to draft custom AI answers.</span>
-                </div>
               </div>
             </>
           ) : (

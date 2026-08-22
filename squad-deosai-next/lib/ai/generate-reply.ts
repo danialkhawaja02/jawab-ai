@@ -356,14 +356,15 @@ export async function generateGroundedReply({
     ? parsed.evidence_ids.filter((id): id is string => typeof id === "string")
     : [];
 
-  if (!supported || reply.length === 0 || reply.length > 900) {
+  if (!reply || reply.length > 900) {
     return { ...handoff({ config, userMessage: message }), tokenUsage };
   }
 
+  const isHandoffPhrase = /connect you directly with the seller|notify the seller|ask the seller|couldn't find that product/i.test(reply);
 
   return {
     reply,
-    action: "reply",
+    action: isHandoffPhrase || !supported ? "handoff" : "reply",
     evidenceIds,
     tokenUsage,
   };

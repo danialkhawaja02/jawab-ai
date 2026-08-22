@@ -3,7 +3,7 @@ import { Client, LocalAuth } from 'whatsapp-web.js';
 // @ts-ignore
 import qrcodeTerminal from 'qrcode-terminal';
 import qrcode from 'qrcode';
-import { handleIncomingMessage } from './handlers';
+import { handleIncomingMessage, handleOutgoingMobileMessage } from './handlers';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
@@ -71,7 +71,7 @@ function getPuppeteerExecutablePath(): string | undefined {
   return undefined;
 }
 
-async function cleanupWhatsAppSession(sellerId: string, client?: Client) {
+async function cleanupWhatsAppSession(sellerId: string, client?: Client, deleteSessionFolder = false) {
   if (client) {
     try {
       const pupBrowser = (client as any)?.pupBrowser;
@@ -90,16 +90,18 @@ async function cleanupWhatsAppSession(sellerId: string, client?: Client) {
     } catch {}
   }
 
-  // Allow OS to release file locks on session directory
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  if (deleteSessionFolder) {
+    // Allow OS to release file locks on session directory
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
-  const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
-  if (fs.existsSync(sessionPath)) {
-    try {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      logger.info(`[WhatsApp] Deleted session folder for ${sellerId}`);
-    } catch (err) {
-      logger.error(`[WhatsApp] Error deleting session folder for ${sellerId}:`, err);
+    const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
+    if (fs.existsSync(sessionPath)) {
+      try {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        logger.info(`[WhatsApp] Deleted session folder for ${sellerId}`);
+      } catch (err) {
+        logger.error(`[WhatsApp] Error deleting session folder for ${sellerId}:`, err);
+      }
     }
   }
 }
@@ -188,7 +190,7 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     state.qrDataUrl = undefined;
     whatsappClients.delete(sellerId);
     failedInitializations.add(sellerId);
-    await cleanupWhatsAppSession(sellerId, client);
+    await cleanupWhatsAppSession(sellerId, client, true);
   });
 
   client.on('disconnected', async (reason: any) => {
@@ -196,12 +198,18 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     state.status = 'disconnected';
     state.qrDataUrl = undefined;
     whatsappClients.delete(sellerId);
-    failedInitializations.add(sellerId);
-    await cleanupWhatsAppSession(sellerId, client);
+    // Keep session folder intact for navigation / detached frame / transient disconnects
+    await cleanupWhatsAppSession(sellerId, client, false);
   });
 
   client.on('message', async (msg) => {
     await handleIncomingMessage(msg, sellerId);
+  });
+
+  client.on('message_create', async (msg) => {
+    if (msg.fromMe) {
+      await handleOutgoingMobileMessage(msg, sellerId);
+    }
   });
 
   try {
@@ -217,8 +225,7 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     logger.error(`[WhatsApp] Failed to initialize for seller ${sellerId}:`, err);
     state.status = 'disconnected';
     whatsappClients.delete(sellerId);
-    failedInitializations.add(sellerId);
-    await cleanupWhatsAppSession(sellerId, client);
+    await cleanupWhatsAppSession(sellerId, client, false);
     throw err;
   }
 
@@ -232,8 +239,7 @@ export function getWhatsAppStatus(sellerId: string, autoRestore = false): WhatsA
   // Check if session directory exists on disk for this seller
   const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
   if (fs.existsSync(sessionPath)) {
-    // If autoRestore is disabled or initialization previously failed for this seller, do NOT spawn Puppeteer
-    if (!autoRestore || failedInitializations.has(sellerId)) {
+    if (!autoRestore) {
       return { status: 'disconnected' };
     }
 
@@ -246,7 +252,6 @@ export function getWhatsAppStatus(sellerId: string, autoRestore = false): WhatsA
       logger.error(`[WhatsApp] Failed to auto-restore session for ${sellerId}:`, err);
       newState.status = 'disconnected';
       whatsappClients.delete(sellerId);
-      failedInitializations.add(sellerId);
     });
     return newState;
   }
@@ -259,7 +264,7 @@ export async function logoutWhatsAppClient(sellerId: string): Promise<void> {
   whatsappClients.delete(sellerId);
   failedInitializations.delete(sellerId);
 
-  await cleanupWhatsAppSession(sellerId, existing?.client);
+  await cleanupWhatsAppSession(sellerId, existing?.client, true);
 }
 
 
