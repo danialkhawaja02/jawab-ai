@@ -39,7 +39,7 @@ export async function GET() {
 
     // Map each seller with live WhatsApp status
     const result = (sellers || []).map((seller) => {
-      const waState = getWhatsAppStatus(seller.id);
+      const waState = getWhatsAppStatus(seller.id, false);
       const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${seller.id}`);
       const hasDiskSession = fs.existsSync(sessionPath);
 

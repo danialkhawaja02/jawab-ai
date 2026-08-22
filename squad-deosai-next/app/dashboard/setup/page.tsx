@@ -126,7 +126,7 @@ export default function SetupPage() {
   const [waQrDataUrl, setWaQrDataUrl] = useState<string | null>(null);
 
   const visibleKnowledgeList = knowledgeList.filter(
-    (k) => k.id !== "k_onboarding_profile" && k.id !== "k_products_table"
+    (k) => k.id !== "k_onboarding_profile" && k.id !== "k_products_table" && k.id !== "k_shopify_config"
   );
 
   // Interactive Playground States

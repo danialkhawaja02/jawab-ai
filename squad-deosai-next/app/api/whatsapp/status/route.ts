@@ -14,7 +14,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const state = getWhatsAppStatus(user.id);
+    const state = getWhatsAppStatus(user.id, true);
     return NextResponse.json({
       status: state.status,
       qrDataUrl: state.qrDataUrl,

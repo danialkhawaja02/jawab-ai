@@ -22,13 +22,18 @@ export interface WhatsAppClientState {
 // Global singleton in-memory store for clients across Next.js API route bundles.
 const globalForWhatsApp = globalThis as unknown as {
   whatsappClients: Map<string, WhatsAppClientState>;
+  failedInitializations: Set<string>;
 };
 
 if (!globalForWhatsApp.whatsappClients) {
   globalForWhatsApp.whatsappClients = new Map<string, WhatsAppClientState>();
 }
+if (!globalForWhatsApp.failedInitializations) {
+  globalForWhatsApp.failedInitializations = new Set<string>();
+}
 
 export const whatsappClients = globalForWhatsApp.whatsappClients;
+export const failedInitializations = globalForWhatsApp.failedInitializations;
 
 function getPuppeteerExecutablePath(): string | undefined {
   // Environment variable takes priority
@@ -66,8 +71,28 @@ function getPuppeteerExecutablePath(): string | undefined {
   return undefined;
 }
 
-async function cleanupWhatsAppSession(sellerId: string) {
-  // Delete session folder for this seller when explicitly logged out
+async function cleanupWhatsAppSession(sellerId: string, client?: Client) {
+  if (client) {
+    try {
+      const pupBrowser = (client as any)?.pupBrowser;
+      if (pupBrowser) {
+        try {
+          const proc = pupBrowser.process();
+          if (proc) {
+            proc.kill('SIGKILL');
+          }
+        } catch {}
+        await pupBrowser.close().catch(() => {});
+      }
+    } catch {}
+    try {
+      await client.destroy();
+    } catch {}
+  }
+
+  // Allow OS to release file locks on session directory
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
   const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
   if (fs.existsSync(sessionPath)) {
     try {
@@ -85,6 +110,9 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     return existing;
   }
 
+  // Clear any previous failure tracking so fresh explicit initialization is attempted
+  failedInitializations.delete(sellerId);
+
   const state: WhatsAppClientState = { status: 'initializing' };
   whatsappClients.set(sellerId, state);
 
@@ -95,6 +123,10 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
 
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sellerId }),
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014111620-alpha.html',
+    },
     puppeteer: {
       ...(executablePath && { executablePath }),
       protocolTimeout: 300000,
@@ -104,15 +136,17 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
-        '--no-zygote',
+        '--no-default-browser-check',
         '--disable-gpu',
         '--disable-background-networking',
         '--disable-default-apps',
         '--disable-extensions',
         '--disable-sync',
         '--disable-plugins',
+        '--disable-site-isolation-trials',
+        '--disable-features=IsolateOrigins,site-per-process',
         '--disable-blink-features=AutomationControlled',
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       ],
       headless: true,
     },
@@ -138,12 +172,14 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     logger.info(`[WhatsApp] Client ready for seller ${sellerId}`);
     state.status = 'connected';
     state.qrDataUrl = undefined;
+    failedInitializations.delete(sellerId);
   });
 
   client.on('authenticated', () => {
     logger.info(`[WhatsApp] Authenticated for seller ${sellerId}`);
     state.status = 'connected';
     state.qrDataUrl = undefined;
+    failedInitializations.delete(sellerId);
   });
 
   client.on('auth_failure', async (msg: any) => {
@@ -151,7 +187,8 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     state.status = 'disconnected';
     state.qrDataUrl = undefined;
     whatsappClients.delete(sellerId);
-    await cleanupWhatsAppSession(sellerId);
+    failedInitializations.add(sellerId);
+    await cleanupWhatsAppSession(sellerId, client);
   });
 
   client.on('disconnected', async (reason: any) => {
@@ -159,7 +196,8 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     state.status = 'disconnected';
     state.qrDataUrl = undefined;
     whatsappClients.delete(sellerId);
-    await cleanupWhatsAppSession(sellerId);
+    failedInitializations.add(sellerId);
+    await cleanupWhatsAppSession(sellerId, client);
   });
 
   client.on('message', async (msg) => {
@@ -179,23 +217,26 @@ export async function initializeWhatsAppClient(sellerId: string): Promise<WhatsA
     logger.error(`[WhatsApp] Failed to initialize for seller ${sellerId}:`, err);
     state.status = 'disconnected';
     whatsappClients.delete(sellerId);
-    try {
-      await client.destroy();
-    } catch {}
-    await cleanupWhatsAppSession(sellerId);
+    failedInitializations.add(sellerId);
+    await cleanupWhatsAppSession(sellerId, client);
     throw err;
   }
 
   return state;
 }
 
-export function getWhatsAppStatus(sellerId: string): WhatsAppClientState {
+export function getWhatsAppStatus(sellerId: string, autoRestore = false): WhatsAppClientState {
   const state = whatsappClients.get(sellerId);
   if (state) return state;
 
   // Check if session directory exists on disk for this seller
   const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
   if (fs.existsSync(sessionPath)) {
+    // If autoRestore is disabled or initialization previously failed for this seller, do NOT spawn Puppeteer
+    if (!autoRestore || failedInitializations.has(sellerId)) {
+      return { status: 'disconnected' };
+    }
+
     // Set initializing state in map to avoid duplicate concurrent initialization calls
     const newState: WhatsAppClientState = { status: 'initializing' };
     whatsappClients.set(sellerId, newState);
@@ -205,7 +246,7 @@ export function getWhatsAppStatus(sellerId: string): WhatsAppClientState {
       logger.error(`[WhatsApp] Failed to auto-restore session for ${sellerId}:`, err);
       newState.status = 'disconnected';
       whatsappClients.delete(sellerId);
-      cleanupWhatsAppSession(sellerId).catch(() => {});
+      failedInitializations.add(sellerId);
     });
     return newState;
   }
@@ -215,17 +256,11 @@ export function getWhatsAppStatus(sellerId: string): WhatsAppClientState {
 
 export async function logoutWhatsAppClient(sellerId: string): Promise<void> {
   const existing = whatsappClients.get(sellerId);
-  if (existing?.client) {
-    try {
-      await existing.client.destroy();
-      logger.info(`[WhatsApp] Destroyed client for ${sellerId}`);
-    } catch (err) {
-      logger.error(`[WhatsApp] Error destroying client for ${sellerId}:`, err);
-    }
-  }
   whatsappClients.delete(sellerId);
+  failedInitializations.delete(sellerId);
 
-  await cleanupWhatsAppSession(sellerId);
+  await cleanupWhatsAppSession(sellerId, existing?.client);
 }
+
 
 

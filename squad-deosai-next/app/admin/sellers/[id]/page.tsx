@@ -50,7 +50,8 @@ export default function SellerDetailPage() {
       if (res.ok) {
         const data = await res.json();
         setSeller(data.seller);
-        setKnowledgeItems(data.knowledgeItems || []);
+        const rawList: KnowledgeItem[] = data.knowledgeItems || [];
+        setKnowledgeItems(rawList.filter((k) => k.id !== 'k_shopify_config' && k.id !== 'k_onboarding_profile'));
         if (data.policies) setPolicies(data.policies);
       }
     } catch (err) {

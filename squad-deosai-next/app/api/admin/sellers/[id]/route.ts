@@ -57,7 +57,7 @@ export async function GET(
       .limit(1);
 
     const hasWaConvs = (waConvs || []).length > 0;
-    const waState = getWhatsAppStatus(sellerId);
+    const waState = getWhatsAppStatus(sellerId, false);
     const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sellerId}`);
     const hasDiskSession = fs.existsSync(sessionPath);
 
